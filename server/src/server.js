@@ -13,12 +13,12 @@ const queueService = require('./services/queue.service');
 const app = express();
 const server = http.createServer(app); // Wrap Express app
 
-// Initialize Socket.IO
 const io = new Server(server, {
   cors: {
-    // Allow both localhost (for dev) and your Vercel app (for prod)
-    origin: ["http://localhost:3000", "https://job-importer-1.vercel.app/"],
-    methods: ["GET", "POST"]
+    // Replace with your ACTUAL Vercel URL
+    origin: ["https://job-importer-1.vercel.app", "http://localhost:3000"],
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 

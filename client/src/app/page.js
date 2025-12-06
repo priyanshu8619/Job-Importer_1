@@ -7,7 +7,10 @@ import api from '@/utils/api';
 import clsx from 'clsx';
 
 // Initialize Socket outside component
-const socket = io(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000');
+const socket = io(process.env.NEXT_PUBLIC_API_URL || 'https://job-importer-1-mf4u.onrender.com', {
+  transports: ['websocket'], // CRITICAL: Forces WebSocket only (Fixes Render polling errors)
+  withCredentials: true,     // Matches the CORS config on your backend
+});
 
 export default function Dashboard() {
   const [logs, setLogs] = useState([]);
