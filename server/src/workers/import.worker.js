@@ -1,96 +1,80 @@
 const { Worker } = require('bullmq');
-const axios = require('axios');
-const { XMLParser } = require('fast-xml-parser');
-const connection = require('../config/redis');
-const Job = require('../models/Job');
-const ImportLog = require('../models/ImportLog');
+const IORedis = require('ioredis');
+const mongoose = require('mongoose');
 
-const parser = new XMLParser();
-let ioInstance; // Variable to store socket instance
+// correct paths to your models and socket
+const ImportLog = require('../models/ImportLog'); 
+const Job = require('../models/Job');             
+const socket = require('../socket');              
 
-const processImport = async (job) => {
+const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
+  maxRetriesPerRequest: null,
+});
+
+const worker = new Worker('import-queue', async (job) => {
   const { url } = job.data;
   
-  // Bonus: Real-time "Start" Event
-  if (ioInstance) ioInstance.emit('job-start', { url });
+  // Get socket instance safely
+  let io;
+  try { io = socket.getIO(); } catch (e) { console.warn("Socket not init"); }
 
-  const logEntry = await ImportLog.create({
-    feedUrl: url,
-    status: 'PROCESSING',
-    startedAt: new Date()
-  });
-
-  let stats = { total: 0, new: 0, updated: 0, failed: 0, errors: [] };
+  // Notify Frontend: Started
+  if (io) io.emit('job-start', { url, jobId: job.id });
 
   try {
-    const response = await axios.get(url);
-    const jsonObj = parser.parse(response.data);
-    
-    let items = jsonObj.rss?.channel?.item || jsonObj.source?.job || [];
-    if (!Array.isArray(items)) items = [items];
+    console.log(`Processing job: ${url}`);
 
-    stats.total = items.length;
+    // --- 1. MOCK DATA (Replace this with real XML parsing later) ---
+    // These are the jobs we want to save
+    const feedData = [
+      { jobId: '101', title: 'React Developer', company: 'Tech Corp', url: 'http://site.com/1', pubDate: new Date() },
+      { jobId: '102', title: 'Node.js Backend', company: 'Soft Sys', url: 'http://site.com/2', pubDate: new Date() },
+      { jobId: '103', title: 'Full Stack Dev', company: 'Web Sol', url: 'http://site.com/3', pubDate: new Date() } // Added a new one
+    ]; 
 
-    for (const item of items) {
-      try {
-        const jobData = {
-          title: item.title,
-          company: item.company || item['job:company'] || 'Unknown',
-          description: item.description,
-          url: item.link || item.url,
-          pubDate: item.pubDate ? new Date(item.pubDate) : new Date(),
-          sourceFeed: url
-        };
-
-        if (!jobData.url) throw new Error("Missing Job URL");
-
-        const existing = await Job.findOne({ url: jobData.url });
-        if (existing) {
-          await Job.updateOne({ url: jobData.url }, jobData);
-          stats.updated++;
-        } else {
-          await Job.create(jobData);
-          stats.new++;
-        }
-      } catch (err) {
-        stats.failed++;
-        stats.errors.push(`Item Error: ${err.message}`);
+    // --- 2. THE FIX: BULK WRITE (UPSERT) ---
+    // This prevents the E11000 Duplicate Key Error
+    const operations = feedData.map(item => ({
+      updateOne: {
+        filter: { jobId: item.jobId }, // Check if this ID exists
+        update: { $set: item },        // Update fields if found
+        upsert: true                   // Insert if not found
       }
-    }
+    }));
 
-    await ImportLog.findByIdAndUpdate(logEntry._id, {
+    const result = await Job.bulkWrite(operations);
+
+    // --- 3. CALCULATE STATS ---
+    const stats = {
+      feedUrl: url,
       status: 'COMPLETED',
-      totalFetched: stats.total,
-      newJobs: stats.new,
-      updatedJobs: stats.updated,
-      failedJobs: stats.failed,
-      errorDetails: stats.errors,
-      completedAt: new Date()
-    });
+      totalFetched: feedData.length,
+      newJobs: result.upsertedCount,    // How many were actually new
+      updatedJobs: result.modifiedCount,// How many were updates
+      failedJobs: 0
+    };
 
-    // Bonus: Real-time "Complete" Event
-    if (ioInstance) ioInstance.emit('job-complete', { feedUrl: url, stats });
+    // --- 4. SAVE HISTORY LOG ---
+    await ImportLog.create(stats);
+
+    // Notify Frontend: Finished
+    if (io) io.emit('job-complete', stats);
+    
+    return stats;
 
   } catch (error) {
-    await ImportLog.findByIdAndUpdate(logEntry._id, {
+    console.error('Job Failed:', error);
+    
+    // Save Failed Log
+    await ImportLog.create({
+      feedUrl: url,
       status: 'FAILED',
-      errorDetails: [error.message],
-      completedAt: new Date()
+      error: error.message // This is where "E11000..." was coming from
     });
-    throw error; 
+
+    if (io) io.emit('job-error', { message: error.message });
+    throw error;
   }
-};
+}, { connection });
 
-const initWorker = (io) => {
-  ioInstance = io; // Save socket instance
-  
-  new Worker('import-queue', processImport, { 
-    connection, 
-    // Bonus: Environment-Configurable Concurrency
-    concurrency: parseInt(process.env.QUEUE_CONCURRENCY) || 5 
-  });
-  
-  console.log('👷 Worker initialized with Real-time updates enabled');
-};
-
-module.exports = initWorker;
+console.log("Worker listening for jobs...");

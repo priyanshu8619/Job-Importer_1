@@ -1,27 +1,31 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { io } from 'socket.io-client'; // Import Client Socket
-import { formatDistanceToNow } from 'date-fns';
+import { io } from 'socket.io-client';
 import api from '@/utils/api';
 import clsx from 'clsx';
 
-// Initialize Socket outside component
+// Initialize Socket
 const socket = io(process.env.NEXT_PUBLIC_API_URL || 'https://job-importer-1-mf4u.onrender.com', {
-  transports: ['websocket'], // CRITICAL: Forces WebSocket only (Fixes Render polling errors)
-  withCredentials: true,     // Matches the CORS config on your backend
+  transports: ['websocket'],
+  withCredentials: true,
 });
 
 export default function Dashboard() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [lastRefreshed, setLastRefreshed] = useState(new Date());
+  
+  // --- PAGINATION STATE ---
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
 
-  const fetchHistory = async () => {
+  const fetchHistory = async (pageNumber = 1) => {
     try {
-      const { data } = await api.get('/import/history');
-      setLogs(data);
-      setLastRefreshed(new Date());
+      // Updated to send page query param
+      const { data } = await api.get(`/import/history?page=${pageNumber}&limit=5`);
+      setLogs(data.logs);
+      setTotalPages(data.pagination.totalPages);
+      setPage(data.pagination.currentPage);
     } catch (error) {
       console.error('Failed to fetch logs:', error);
     }
@@ -30,8 +34,8 @@ export default function Dashboard() {
   const handleTrigger = async () => {
     setLoading(true);
     try {
-      await api.post('/import/trigger');
-      // No need to fetch here, socket 'job-start' will trigger it
+      await api.post('/import/trigger', { url: 'https://jobicy.com/?feed=job_feed' });
+      // We don't fetchHistory here immediately; we wait for the socket 'job-start'
     } catch (error) {
       alert('Failed: ' + error.message);
     } finally {
@@ -40,56 +44,41 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    fetchHistory();
+    fetchHistory(page);
 
     // --- REAL-TIME LISTENERS ---
-    
-    // 1. When a job starts processing
-    socket.on('job-start', (data) => {
-      console.log('Job Started:', data.url);
-      fetchHistory(); // Refresh to show "PROCESSING" status
+    socket.on('job-start', () => {
+      // If a new job starts, go back to page 1 to see it
+      if (page !== 1) setPage(1);
+      else fetchHistory(1);
     });
 
-    // 2. When a job finishes
-    socket.on('job-complete', (data) => {
-      console.log('Job Complete:', data.feedUrl);
-      fetchHistory(); // Refresh to show "COMPLETED" status
-    });
+    socket.on('job-complete', () => fetchHistory(1));
 
-    // Cleanup listeners on unmount
     return () => {
       socket.off('job-start');
       socket.off('job-complete');
     };
-  }, []);
+  }, [page]); // Re-run when page changes
 
   return (
     <div className="min-h-screen bg-gray-50 p-8 font-sans text-gray-900">
       <div className="max-w-7xl mx-auto">
         
-        <div className="flex flex-col md:flex-row justify-between items-center mb-8 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+        {/* HEADER */}
+        <div className="flex justify-between items-center mb-8 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
           <div>
             <h1 className="text-3xl font-bold text-gray-800">Job Import Manager</h1>
-            <p className="text-gray-500 mt-1">
-              Real-time Feed Processor & History Tracker
-            </p>
+            <p className="text-gray-500 mt-1">Real-time Feed Processor (Queue: Redis)</p>
           </div>
-          
-          <div className="flex items-center gap-4 mt-4 md:mt-0">
-             <span className="text-sm text-gray-400">
-                Live Updates Active 🟢
-             </span>
-            <button
-              onClick={handleTrigger}
-              disabled={loading}
-              className={`px-6 py-3 rounded-lg font-medium text-white shadow-lg transition-all 
-                ${loading 
-                  ? 'bg-gray-400 cursor-not-allowed' 
-                  : 'bg-indigo-600 hover:bg-indigo-700 active:scale-95'}`}
-            >
-              {loading ? 'Queueing...' : '🚀 Run New Import'}
-            </button>
-          </div>
+          <button
+            onClick={handleTrigger}
+            disabled={loading}
+            className={`px-6 py-3 rounded-lg font-medium text-white shadow-lg transition-all 
+              ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 active:scale-95'}`}
+          >
+            {loading ? 'Queueing...' : '🚀 Run New Import'}
+          </button>
         </div>
 
         {/* TABLE */}
@@ -100,37 +89,23 @@ export default function Dashboard() {
                 <tr className="bg-gray-50 border-b border-gray-200 text-xs uppercase text-gray-500 font-semibold tracking-wider">
                   <th className="px-6 py-4">Status</th>
                   <th className="px-6 py-4">Source Feed</th>
-                  <th className="px-6 py-4 text-center">Total</th>
-                  <th className="px-6 py-4 text-center text-green-600">New</th>
-                  <th className="px-6 py-4 text-center text-blue-600">Updated</th>
-                  <th className="px-6 py-4 text-center text-red-600">Failed</th>
+                  <th className="px-6 py-4 text-center">New</th>
+                  <th className="px-6 py-4 text-center">Updated</th>
                   <th className="px-6 py-4 text-right">Time</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {logs.length === 0 ? (
-                  <tr>
-                    <td colSpan="7" className="px-6 py-10 text-center text-gray-400">
-                      No import history found. Click "Run New Import".
-                    </td>
-                  </tr>
+                  <tr><td colSpan="5" className="px-6 py-10 text-center text-gray-400">No logs found.</td></tr>
                 ) : (
                   logs.map((log) => (
-                    <tr key={log._id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4">
-                        <StatusBadge status={log.status} />
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="max-w-[300px] truncate text-sm text-gray-700" title={log.feedUrl}>
-                          {log.feedUrl}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-center font-medium text-gray-700">{log.totalFetched}</td>
-                      <td className="px-6 py-4 text-center font-bold text-green-600 bg-green-50 rounded-lg">+{log.newJobs}</td>
+                    <tr key={log._id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4"><StatusBadge status={log.status} /></td>
+                      <td className="px-6 py-4 text-sm text-gray-700">{log.feedUrl}</td>
+                      <td className="px-6 py-4 text-center font-bold text-green-600">+{log.newJobs}</td>
                       <td className="px-6 py-4 text-center text-blue-600">{log.updatedJobs}</td>
-                      <td className="px-6 py-4 text-center text-red-600">{log.failedJobs}</td>
-                      <td className="px-6 py-4 text-right text-sm text-gray-500 whitespace-nowrap">
-                        {new Date(log.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      <td className="px-6 py-4 text-right text-sm text-gray-500">
+                        {new Date(log.createdAt).toLocaleTimeString()}
                       </td>
                     </tr>
                   ))
@@ -138,6 +113,30 @@ export default function Dashboard() {
               </tbody>
             </table>
           </div>
+
+          {/* PAGINATION CONTROLS */}
+          <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-between items-center">
+            <span className="text-sm text-gray-500">
+              Page {page} of {totalPages}
+            </span>
+            <div className="space-x-2">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="px-4 py-2 text-sm bg-white border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="px-4 py-2 text-sm bg-white border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+          
         </div>
       </div>
     </div>
@@ -146,14 +145,13 @@ export default function Dashboard() {
 
 function StatusBadge({ status }) {
   const styles = {
-    PENDING: 'bg-gray-100 text-gray-600',
     PROCESSING: 'bg-yellow-50 text-yellow-700 animate-pulse border-yellow-200',
     COMPLETED: 'bg-green-50 text-green-700 border-green-200',
     FAILED: 'bg-red-50 text-red-700 border-red-200',
   };
   return (
-    <span className={clsx('px-3 py-1 rounded-full text-xs font-bold border', styles[status] || styles.PENDING)}>
+    <span className={clsx('px-3 py-1 rounded-full text-xs font-bold border', styles[status])}>
       {status}
     </span>
   );
-}
+} 

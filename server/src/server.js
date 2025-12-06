@@ -1,47 +1,51 @@
 require('dotenv').config();
 const express = require('express');
-const http = require('http'); // Import HTTP
-const { Server } = require('socket.io'); // Import Socket.IO
+const http = require('http');
 const cors = require('cors');
 const cron = require('node-cron');
 
 const connectDB = require('./config/db');
 const importRoutes = require('./routes/import.routes');
-const initWorker = require('./workers/import.worker');
 const queueService = require('./services/queue.service');
 
-const app = express();
-const server = http.createServer(app); // Wrap Express app
+// 1. Import the Singleton Socket file
+const socket = require('./socket'); 
 
-const io = new Server(server, {
-  cors: {
-    // Replace with your ACTUAL Vercel URL
-    origin: ["https://job-importer-1.vercel.app", "http://localhost:3000"],
-    methods: ["GET", "POST"],
-    credentials: true
-  }
-});
+// 2. Load the Worker Script
+// This runs the worker immediately upon require. 
+// We do NOT need to pass 'io' because the worker imports it internally.
+require('./workers/import.worker'); 
+
+const app = express();
+const server = http.createServer(app); 
+
+// 3. Initialize Socket.IO attached to the HTTP server
+// This must happen before we start listening
+const io = socket.init(server);
 
 const PORT = process.env.PORT || 5000;
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 
 // Connect Database
 connectDB();
 
-// Initialize Worker (Pass 'io' so worker can emit events)
-initWorker(io);
-
+// Routes
 app.use('/api/import', importRoutes);
 
-// Cron Job
+// Cron Job (Scheduled Import)
 cron.schedule('0 * * * *', async () => {
   console.log('⏰ Cron: Triggering scheduled import...');
-  await queueService.addJobsToQueue();
+  try {
+    await queueService.addJobsToQueue();
+  } catch (err) {
+    console.error('Cron failed:', err.message);
+  }
 });
 
-// Use server.listen instead of app.listen
+// Start Server
 server.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
