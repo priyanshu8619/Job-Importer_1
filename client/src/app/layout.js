@@ -8,6 +8,7 @@ export const metadata = {
   description: 'Scalable Job Feed Processor',
 };
 
+// This export is MANDATORY for Next.js
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
