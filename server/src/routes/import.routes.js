@@ -4,8 +4,16 @@ const router = express.Router();
 const { Queue } = require('bullmq');
 const IORedis = require('ioredis');
 const ImportLog = require('../models/ImportLog');
-// Redis Connection for the Queue Producer
-const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379');
+
+// ✅ NEW CONNECTION LOGIC:
+const redisConfig = {
+  host: process.env.REDIS_HOST,
+  port: process.env.REDIS_PORT,
+  password: process.env.REDIS_PASSWORD,
+  maxRetriesPerRequest: null,
+};
+
+const connection = new IORedis(redisConfig);
 const importQueue = new Queue('import-queue', { connection });
 
 // 1. TRIGGER IMPORT (Now uses Queue)

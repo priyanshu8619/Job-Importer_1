@@ -7,9 +7,14 @@ const ImportLog = require('../models/ImportLog');
 const Job = require('../models/Job');             
 const socket = require('../socket');              
 
-const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
+// ✅ NEW CONNECTION LOGIC:
+const redisConfig = {
+  host: process.env.REDIS_HOST,
+  port: process.env.REDIS_PORT,
+  password: process.env.REDIS_PASSWORD,
   maxRetriesPerRequest: null,
-});
+};
+const connection = new IORedis(redisConfig);
 
 const worker = new Worker('import-queue', async (job) => {
   const { url } = job.data;
