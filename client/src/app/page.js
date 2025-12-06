@@ -7,7 +7,7 @@ import api from '@/utils/api';
 import clsx from 'clsx';
 
 // Initialize Socket outside component
-const socket = io('http://localhost:5000');
+const socket = io(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000');
 
 export default function Dashboard() {
   const [logs, setLogs] = useState([]);

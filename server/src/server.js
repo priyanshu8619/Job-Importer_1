@@ -16,7 +16,8 @@ const server = http.createServer(app); // Wrap Express app
 // Initialize Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:3000", // Allow Frontend
+    // Allow both localhost (for dev) and your Vercel app (for prod)
+    origin: ["http://localhost:3000", "https://job-importer-1.vercel.app/"],
     methods: ["GET", "POST"]
   }
 });
